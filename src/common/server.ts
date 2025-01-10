@@ -31,6 +31,8 @@ import {
   supportsNativeServer,
   versionToString,
   VersionInfo,
+  MINIMUM_SUPPORTED_EXECUTABLE_VERSION,
+  supportsExecutable,
   MINIMUM_NATIVE_SERVER_VERSION,
   supportsStableNativeServer,
   NATIVE_SERVER_STABLE_VERSION,
@@ -78,10 +80,31 @@ function executeFile(file: string, args: string[] = []): Promise<string> {
  * Get the version of the Ruff executable at the given path.
  */
 async function getRuffVersion(executable: string): Promise<VersionInfo> {
-  const stdout = await executeFile(executable, ["--version"]);
+  const stdout = await executeFile(executable, ["version"]);
   const version = stdout.trim().split(" ")[1];
   const [major, minor, patch] = version.split(".").map((x) => parseInt(x, 10));
   return { major, minor, patch };
+}
+
+/**
+ * Validate and log executable from given path.
+ */
+async function validateUsingExecutable(executable: string, strategy: string) {
+  try {
+    const ruffVersion = await getRuffVersion(executable);
+    if (!supportsExecutable(ruffVersion)) {
+      const message = `Skip unsupported executable from ${strategy}: ${executable} (Reqiuired at least ${versionToString(
+        MINIMUM_SUPPORTED_EXECUTABLE_VERSION,
+      )}, but found ${versionToString(ruffVersion)} instead)`;
+      logger.error(message);
+      return false;
+    }
+    logger.info(`Using ${strategy}: ${executable}`);
+    return true;
+  } catch (ex) {
+    logger.info(`Skip invalid executable from ${strategy}: ${executable}`);
+    return false;
+  }
 }
 
 /**
@@ -108,8 +131,7 @@ async function findRuffBinaryPath(settings: ISettings): Promise<string> {
   // 'path' setting takes priority over everything.
   if (settings.path.length > 0) {
     for (const path of settings.path) {
-      if (await fsapi.pathExists(path)) {
-        logger.info(`Using 'path' setting: ${path}`);
+      if (await fsapi.pathExists(path) && await validateUsingExecutable(path, "'path' setting")) {
         return path;
       }
     }
@@ -140,16 +162,14 @@ async function findRuffBinaryPath(settings: ISettings): Promise<string> {
     logger.error(`Error while trying to find the Ruff binary: ${err}`);
   }
 
-  if (ruffBinaryPath && ruffBinaryPath.length > 0) {
-    // First choice: the executable found by the script.
-    logger.info(`Using the Ruff binary: ${ruffBinaryPath}`);
+  // First choice: the executable found by the script.
+  if (ruffBinaryPath && ruffBinaryPath.length > 0 && await validateUsingExecutable(ruffBinaryPath, "the Ruff binary")) {
     return ruffBinaryPath;
   }
 
   // Second choice: the executable in the global environment.
   const environmentPath = await which(RUFF_BINARY_NAME, { nothrow: true });
-  if (environmentPath) {
-    logger.info(`Using environment executable: ${environmentPath}`);
+  if (environmentPath && await validateUsingExecutable(environmentPath, "environment executable")) {
     return environmentPath;
   }
 
